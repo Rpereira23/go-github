@@ -19,36 +19,38 @@ func TestRepositoriesService_ListCommits(t *testing.T) {
 	client, mux, _, teardown := setup()
 	defer teardown()
 
-	// given
-	mux.HandleFunc("/repos/o/r/commits", func(w http.ResponseWriter, r *http.Request) {
-		testMethod(t, r, "GET")
-		testFormValues(t, r,
-			values{
-				"sha":    "s",
-				"path":   "p",
-				"author": "a",
-				"since":  "2013-08-01T00:00:00Z",
-				"until":  "2013-09-03T00:00:00Z",
-			})
-		fmt.Fprintf(w, `[{"sha": "s"}]`)
+	t.Run("Valid commit testing", func(t *testing.T) {
+		// given
+		mux.HandleFunc("/repos/o/r/commits", func(w http.ResponseWriter, r *http.Request) {
+			testMethod(t, r, "GET")
+			testFormValues(t, r,
+				values{
+					"sha":    "s",
+					"path":   "p",
+					"author": "a",
+					"since":  "2013-08-01T00:00:00Z",
+					"until":  "2013-09-03T00:00:00Z",
+				})
+			fmt.Fprintf(w, `[{"sha": "s"}]`)
+		})
+
+		opt := &CommitsListOptions{
+			SHA:    "s",
+			Path:   "p",
+			Author: "a",
+			Since:  time.Date(2013, time.August, 1, 0, 0, 0, 0, time.UTC),
+			Until:  time.Date(2013, time.September, 3, 0, 0, 0, 0, time.UTC),
+		}
+		commits, _, err := client.Repositories.ListCommits(context.Background(), "o", "r", opt)
+		if err != nil {
+			t.Errorf("Repositories.ListCommits returned error: %v", err)
+		}
+
+		want := []*RepositoryCommit{{SHA: String("s")}}
+		if !reflect.DeepEqual(commits, want) {
+			t.Errorf("Repositories.ListCommits returned %+v, want %+v", commits, want)
+		}
 	})
-
-	opt := &CommitsListOptions{
-		SHA:    "s",
-		Path:   "p",
-		Author: "a",
-		Since:  time.Date(2013, time.August, 1, 0, 0, 0, 0, time.UTC),
-		Until:  time.Date(2013, time.September, 3, 0, 0, 0, 0, time.UTC),
-	}
-	commits, _, err := client.Repositories.ListCommits(context.Background(), "o", "r", opt)
-	if err != nil {
-		t.Errorf("Repositories.ListCommits returned error: %v", err)
-	}
-
-	want := []*RepositoryCommit{{SHA: String("s")}}
-	if !reflect.DeepEqual(commits, want) {
-		t.Errorf("Repositories.ListCommits returned %+v, want %+v", commits, want)
-	}
 }
 
 func TestRepositoriesService_GetCommit(t *testing.T) {
@@ -187,40 +189,63 @@ func TestRepositoriesService_GetCommitSHA1(t *testing.T) {
 	defer teardown()
 	const sha1 = "01234abcde"
 
-	mux.HandleFunc("/repos/o/r/commits/master", func(w http.ResponseWriter, r *http.Request) {
-		testMethod(t, r, "GET")
-		testHeader(t, r, "Accept", mediaTypeV3SHA)
+	t.Run("Obtaining from master", func(t *testing.T) {
+		mux.HandleFunc("/repos/o/r/commits/master", func(w http.ResponseWriter, r *http.Request) {
+			testMethod(t, r, "GET")
+			testHeader(t, r, "Accept", mediaTypeV3SHA)
 
-		fmt.Fprintf(w, sha1)
+			fmt.Fprintf(w, sha1)
+		})
+
+		got, _, err := client.Repositories.GetCommitSHA1(context.Background(), "o", "r", "master", "")
+		if err != nil {
+			t.Errorf("Repositories.GetCommitSHA1 returned error: %v", err)
+		}
+
+		want := sha1
+		if got != want {
+			t.Errorf("Repositories.GetCommitSHA1 = %v, want %v", got, want)
+		}
 	})
 
-	got, _, err := client.Repositories.GetCommitSHA1(context.Background(), "o", "r", "master", "")
-	if err != nil {
-		t.Errorf("Repositories.GetCommitSHA1 returned error: %v", err)
-	}
+	t.Run("Testing non-existing branch", func(t *testing.T) {
+		mux.HandleFunc("/repos/o/r/commits/tag", func(w http.ResponseWriter, r *http.Request) {
+			testMethod(t, r, "GET")
+			testHeader(t, r, "Accept", mediaTypeV3SHA)
+			testHeader(t, r, "If-None-Match", `"`+sha1+`"`)
 
-	want := sha1
-	if got != want {
-		t.Errorf("Repositories.GetCommitSHA1 = %v, want %v", got, want)
-	}
+			w.WriteHeader(http.StatusNotModified)
+		})
 
-	mux.HandleFunc("/repos/o/r/commits/tag", func(w http.ResponseWriter, r *http.Request) {
-		testMethod(t, r, "GET")
-		testHeader(t, r, "Accept", mediaTypeV3SHA)
-		testHeader(t, r, "If-None-Match", `"`+sha1+`"`)
+		got, _, err := client.Repositories.GetCommitSHA1(context.Background(), "o", "r", "tag", sha1)
+		if err == nil {
+			t.Errorf("Expected HTTP 304 response")
+		}
 
-		w.WriteHeader(http.StatusNotModified)
+		want := ""
+		if got != want {
+			t.Errorf("Repositories.GetCommitSHA1 = %v, want %v", got, want)
+		}
 	})
 
-	got, _, err = client.Repositories.GetCommitSHA1(context.Background(), "o", "r", "tag", sha1)
-	if err == nil {
-		t.Errorf("Expected HTTP 304 response")
-	}
+	t.Run("Testing with URL escaping for ref parameter.", func(t *testing.T) {
+		mux.HandleFunc("/repos/o/r/commits/tag%", func(w http.ResponseWriter, r *http.Request) {
+			testMethod(t, r, "GET")
+			testHeader(t, r, "Accept", mediaTypeV3SHA)
 
-	want = ""
-	if got != want {
-		t.Errorf("Repositories.GetCommitSHA1 = %v, want %v", got, want)
-	}
+			fmt.Fprintf(w, sha1)
+		})
+
+		got, _, err := client.Repositories.GetCommitSHA1(context.Background(), "o", "r", "cpu100%", "")
+		if err == nil {
+			t.Errorf("Expected HTTP 304 response")
+		}
+
+		want := ""
+		if got != want {
+			t.Errorf("Repositories.GetCommitSHA1 = %v, want %v", got, want)
+		}
+	})
 }
 
 func TestRepositoriesService_CompareCommits(t *testing.T) {
